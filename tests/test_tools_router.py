@@ -1,4 +1,4 @@
-"""ToolRouter: preview mapping over the existing PolicyEngine + Groq stub."""
+"""ToolRouter: preview mapping and guarded LLM draft delegation."""
 
 from __future__ import annotations
 
@@ -55,9 +55,25 @@ def test_demo_flow_four_beats() -> None:
     assert len(ToolRouter(ENG).describe_demo_flow()) == 4
 
 
-async def test_groq_stub_string(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("warden.tools.router.get_router_llm", lambda: None)
-    assert "stub draft" in await draft_with_groq("weekly ops report")
+async def test_groq_draft_uses_guarded_agent_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str, str]] = []
+
+    async def fake_invoke_agent_draft(
+        *, prompt: str, run_id: str, thread_id: str, actor: str
+    ) -> str:
+        calls.append((prompt, run_id, thread_id, actor))
+        return "Guarded draft"
+
+    monkeypatch.setattr(
+        "backend.api.llm.invoke_agent_draft",
+        fake_invoke_agent_draft,
+    )
+    assert await draft_with_groq("weekly ops report", "thread-1") == "Guarded draft"
+    assert calls == [
+        ("weekly ops report", "agent-run:thread-1", "thread-1", "OpsAssistant")
+    ]
 
 
 def test_action_kind_tool() -> None:

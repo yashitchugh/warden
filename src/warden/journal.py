@@ -113,7 +113,7 @@ def _canonical_json_default(value: Any) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, Enum):
-        return value.value
+        return str(value.value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
@@ -285,7 +285,11 @@ class InMemoryJournal(AuditJournal):
             if run_id:
                 filtered = [e for e in filtered if e.run_id == run_id]
             if actor:
-                filtered = [e for e in filtered if actor.lower() in e.actor.lower()]
+                filtered = [
+                    e
+                    for e in filtered
+                    if actor.lower() in (e.actor or "").lower()
+                ]
             if q:
                 ql = q.lower()
                 filtered = [
@@ -294,7 +298,7 @@ class InMemoryJournal(AuditJournal):
                     if ql in e.id.lower()
                     or (e.action_id and ql in e.action_id.lower())
                     or ql in e.run_id.lower()
-                    or ql in e.actor.lower()
+                    or ql in (e.actor or "").lower()
                     or ql in e.description.lower()
                     or ql in str(e.payload).lower()
                 ]

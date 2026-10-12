@@ -1,8 +1,6 @@
 """ToolRouter: preview-only dispatcher over existing governance seams.
 
-No provider calls are made here. LLM execution belongs to GuardedExecutor and
-GuardedLLMClient; the legacy Groq draft helper remains a deterministic stub for
-compatibility with the demo until a guarded provider is configured.
+LLM drafts use the backend's shared GuardedExecutor and GuardedLLMClient path.
 """
 
 from __future__ import annotations
@@ -70,10 +68,17 @@ def get_router_llm() -> Any | None:
     return None
 
 
-async def draft_with_groq(prompt: str) -> str:
-    """Return deterministic demo text without bypassing GuardedLLMClient."""
-    del prompt
-    return "Groq unavailable — stub draft: weekly ops report ready"
+async def draft_with_groq(prompt: str, thread_id: str | None = None) -> str:
+    """Generate a Groq draft through the shared guarded LLM execution path."""
+    from backend.api.llm import invoke_agent_draft
+
+    thread = thread_id or f"agent-chat-{uuid.uuid4().hex[:12]}"
+    return await invoke_agent_draft(
+        prompt=prompt,
+        run_id=f"agent-run:{thread}",
+        thread_id=thread,
+        actor="OpsAssistant",
+    )
 
 
 def make_tool_action(name: str, payload: dict[str, Any], run_id: str, thread_id: str) -> Action:

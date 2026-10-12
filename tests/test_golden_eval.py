@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from warden.models import Action, ActionKind
-from warden.policy.engine import PolicyDecision, PolicyEngine
+from warden.policy.engine import PolicyDecision, PolicyEngine, PolicyResult
 
 from tests.eval_golden import (
     DEFAULT_DATASET,
@@ -117,13 +117,15 @@ def test_named_behavioral_checks_against_real_engine() -> None:
             run_id="spot-run",
             thread_id="spot-thread",
         )
-        return (await engine.evaluate(action)).decision
+        result = await engine.evaluate(action)
+        assert isinstance(result, PolicyResult)
+        return result.decision
 
     import asyncio
 
-    assert asyncio.run(decide("query_table",
-                              {"query": "SELECT id FROM service_metrics"}
-                              )) == PolicyDecision.ALLOW
+    assert asyncio.run(
+        decide("query_table", {"query": "SELECT id FROM service_metrics"})
+    ) == PolicyDecision.ALLOW
     assert asyncio.run(decide("execute_sql",
                               {"query": "DROP TABLE audit_log;"}
                               )) == PolicyDecision.DENY

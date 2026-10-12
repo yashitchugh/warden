@@ -218,7 +218,7 @@ def test_read_service_logs_symlink_escape_rejected(tmp_path: Path) -> None:
         pytest.skip("Symlink creation not supported in current environment/permissions")
 
     act = _action("read_service_logs", {"service": "auth-service", "file_name": "escaped.log"})
-    with pytest.raises(PermissionError, match="outside approved log root"):
+    with pytest.raises(PermissionError, match="(escapes|outside) approved log root"):
         read_service_logs(act, log_root_dir=log_dir)
 
 

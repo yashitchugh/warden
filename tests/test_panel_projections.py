@@ -9,11 +9,26 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from backend.api import llm as llm_api
+from warden.llm.types import LLMRequest
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def fake_guarded_llm_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def provider(request: LLMRequest) -> dict[str, object]:
+        return {
+            "id": "panel-test-response",
+            "choices": [{"message": {"content": "Panel test assistant reply."}}],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+        }
+
+    monkeypatch.setattr(llm_api._client, "provider_caller", provider)
 
 
 def _post_chat(message: str, agent: str, thread: str) -> str:

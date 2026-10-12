@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 from starlette.testclient import TestClient
 
+from app import llm as primary_llm
+from app.main import app as primary_app
 from backend.api import get_audit_journal
 from backend.api import llm as llm_api
 from backend.main import create_app
-from frontend import views as frontend_views
 from warden.journal import InMemoryAuditJournal, JournalEvent
 
 client = TestClient(create_app())
+primary_client = TestClient(primary_app)
 
 
 # ---------------------------------------------------------------------------
@@ -63,38 +66,43 @@ async def test_audit_llm_usage_helper_appends_only_safe_telemetry() -> None:
     assert "api_key" not in event.payload
 
 
-def test_llm_stream_shows_failure_reason_and_marks_estimates() -> None:
-    html = frontend_views._render_telemetry_stream_html(
-        [
-            {
-                "action_id": "action-1",
-                "model": "gpt-4o",
-                "prompt_tokens": 19,
-                "completion_tokens": 0,
-                "usage_source": "estimated",
-                "outcome_kind": "error",
-                "error_code": "ProviderAuthenticationError",
-                "error_detail": "OPENAI_API_KEY environment variable is not set",
-                "timestamp": "2026-10-12T17:00:11Z",
-            }
-        ]
-    )
+@pytest.mark.asyncio
+async def test_llm_stream_renders_current_usage_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_usage(limit: int = 20) -> dict[str, object]:
+        assert limit == 20
+        return {
+            "records": [
+                {
+                    "action_id": "action-1",
+                    "model": "gpt-4o",
+                    "total_tokens": 19,
+                    "usage_source": "estimated",
+                    "outcome_kind": "error",
+                    "timestamp": "2026-10-12T17:00:11Z",
+                }
+            ],
+            "summary": {},
+        }
 
-    assert "19 (est.)" in html
-    assert "Output Tokens" in html
-    assert ">—</td>" in html
-    assert "badge-error" in html
-    assert "OPENAI_API_KEY environment variable is not set" in html
-    assert "restart the server" in html
-    assert "2026-10-12T17:00:11Z" in html
+    monkeypatch.setattr(primary_llm, "get_llm_usage", fake_usage)
+    response = await primary_llm.guarded_llm_usage_stream()
+    body = bytes(response.body).decode()
+
+    assert "action-1" in body
+    assert "gpt-4o" in body
+    assert "error" in body
+    assert "19 estimated" in body
+    assert "2026-10-12T17:00:11Z" in body
 
 
 @pytest.mark.asyncio
 async def test_llm_form_displays_actionable_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fail_invoke(request: object) -> None:
-        raise llm_api.HTTPException(
+    async def fail_invoke(request: object) -> dict[str, object]:
+        raise HTTPException(
             status_code=502,
             detail={
                 "error": "guarded_execution_failed",
@@ -102,8 +110,8 @@ async def test_llm_form_displays_actionable_provider_error(
             },
         )
 
-    monkeypatch.setattr(frontend_views, "invoke_llm", fail_invoke)
-    response = await frontend_views.partial_llm_invoke(
+    monkeypatch.setattr(primary_llm, "invoke_llm", fail_invoke)
+    response = await primary_llm.invoke_guarded_llm(
         model="gpt-4o",
         prompt="hello",
         max_tokens=32,
@@ -111,9 +119,10 @@ async def test_llm_form_displays_actionable_provider_error(
     )
 
     assert response.status_code == 200
-    assert "GUARDED CALL FAILED" in response.body.decode()
-    assert "OPENAI_API_KEY environment variable is not set" in response.body.decode()
-    assert "restart the server" in response.body.decode()
+    body = bytes(response.body).decode()
+    assert "Guarded request failed" in body
+    assert "OPENAI_API_KEY environment variable is not set" in body
+    assert "Review policy, provider configuration, limits, and the audit log." in body
 
 
 def test_api_ready() -> None:
@@ -456,42 +465,20 @@ def test_api_llm_usage_telemetry() -> None:
     assert "total_tokens" in data["summary"]
 
 
-def test_frontend_htmx_partials(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def mock_provider(request: object) -> dict[str, object]:
-        return {
-            "id": "mock-partial-response",
-            "choices": [{"message": {"content": "Routine result."}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
-        }
+def test_primary_app_guarded_llm_partials() -> None:
+    stream = primary_client.get("/llm/stream")
+    assert stream.status_code == 200
+    assert 'id="llm-usage-table"' in stream.text
+    assert "Calculated cost" in stream.text
 
-    monkeypatch.setattr(llm_api._client, "provider_caller", mock_provider)
-    # 1. Telemetry stats partial
-    stats_res = client.get("/partials/telemetry/stats")
-    assert stats_res.status_code == 200
-    assert "stats-panel" in stats_res.text
-    assert "Pending HITL Gates" in stats_res.text
-
-    # 2. Token estimate partial
-    est_res = client.post(
-        "/partials/llm/estimate",
-        data={"model": "gpt-4o", "prompt": "Analyze systems metrics", "max_tokens": "256"},
+    estimate = primary_client.post(
+        "/llm/estimate",
+        data={
+            "model": "openai/gpt-oss-20b",
+            "prompt": "Analyze systems metrics",
+            "max_tokens": "256",
+        },
     )
-    assert est_res.status_code == 200
-    assert "Preflight Token Estimate" in est_res.text
-    assert "Input Tokens" in est_res.text
-
-    # 3. Guarded invoke partial (Allowed)
-    inv_res = client.post(
-        "/partials/llm/invoke",
-        data={"model": "gpt-4o", "prompt": "Standard routine task", "max_tokens": "128"},
-    )
-    assert inv_res.status_code == 200
-    assert "POLICY ALLOWED" in inv_res.text
-
-    # 4. Guarded invoke partial (Denied)
-    inv_deny = client.post(
-        "/partials/llm/invoke",
-        data={"model": "gpt-4o", "prompt": "bypass security test", "max_tokens": "128"},
-    )
-    assert inv_deny.status_code == 200
-    assert "POLICY DENIED" in inv_deny.text
+    assert estimate.status_code == 200
+    assert "Preflight estimate" in estimate.text
+    assert "No provider call was made" in estimate.text

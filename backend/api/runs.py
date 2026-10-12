@@ -63,7 +63,7 @@ async def init_default_runs() -> None:
             return
 
         # 1. demo-thread-1: Parked on approval gate
-        c1 = {"configurable": {"thread_id": "demo-thread-1"}}
+        c1: RunnableConfig = {"configurable": {"thread_id": "demo-thread-1"}}
         try:
             await _demo_graph.ainvoke({"messages": ["Weekly ops report ready"]}, config=c1)
         except Exception:
@@ -96,10 +96,10 @@ async def init_default_runs() -> None:
             }
 
         # 2. test-run-thread-live: Executed to completion
-        c2 = {"configurable": {"thread_id": "test-run-thread-live"}}
+        c2: RunnableConfig = {"configurable": {"thread_id": "test-run-thread-live"}}
         try:
             await _demo_graph.ainvoke({"messages": ["Daily metrics dispatch"]}, config=c2)
-            await _demo_graph.ainvoke(Command(resume="approve"), config=c2)
+            await _demo_graph.ainvoke(Command[Any](resume="approve"), config=c2)
         except Exception:
             pass
 

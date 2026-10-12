@@ -34,6 +34,7 @@ from warden.models import (
     Allowed,
     Denied,
     Error,
+    ExecutionContext as DomainExecutionContext,
     GateDecision,
     GateRequest,
     GateVerdict,
@@ -50,7 +51,13 @@ from warden.llm.types import BudgetConfig
 from warden.llm.client import GuardedLLMClient, LLMExecutionResult
 
 logger = logging.getLogger("warden.executor")
-_DEFAULT_POLICY = object()
+
+
+class _DefaultPolicy:
+    pass
+
+
+_DEFAULT_POLICY = _DefaultPolicy()
 
 
 @dataclass(frozen=True)
@@ -96,7 +103,7 @@ class GuardedExecutor:
     def __init__(
         self,
         journal: AsyncAuditJournal | AuditJournal | None = None,
-        policy: PolicyEngine | None | object = _DEFAULT_POLICY,
+        policy: PolicyEngine | None | _DefaultPolicy = _DEFAULT_POLICY,
         sandbox: Any | None = None,
         llm_client: Any | None = None,
         *,
@@ -107,6 +114,7 @@ class GuardedExecutor:
         approver_keys: Any | None = None,
     ) -> None:
         self.journal = journal
+        self.policy_engine: PolicyEngine | None
         if policy is _DEFAULT_POLICY:
             self.policy_engine = (
                 policy_engine
@@ -116,8 +124,10 @@ class GuardedExecutor:
                     fallback_to_layers=True,
                 )
             )
+        elif isinstance(policy, PolicyEngine):
+            self.policy_engine = policy
         else:
-            self.policy_engine = policy if policy is not None else policy_engine
+            self.policy_engine = policy_engine
         self.policy = self.policy_engine
         self.sandbox = sandbox
         self.llm_client = llm_client
@@ -190,10 +200,20 @@ class GuardedExecutor:
         return None
 
     def _normalize_ctx(
-        self, ctx: ExecutionContext | dict[str, Any] | None, action: Action
+        self,
+        ctx: ExecutionContext | DomainExecutionContext | dict[str, Any] | None,
+        action: Action,
     ) -> ExecutionContext:
         if isinstance(ctx, ExecutionContext):
             return ctx
+        if isinstance(ctx, DomainExecutionContext):
+            return ExecutionContext(
+                run_id=ctx.run_id or action.run_id,
+                thread_id=ctx.thread_id or action.thread_id,
+                checkpoint_step=ctx.checkpoint_step,
+                actor=ctx.actor,
+                metadata=ctx.metadata,
+            )
         if isinstance(ctx, dict):
             return ExecutionContext(
                 run_id=str(ctx.get("run_id", action.run_id)),
@@ -210,7 +230,7 @@ class GuardedExecutor:
     async def execute(
         self,
         action: Action,
-        ctx: ExecutionContext | dict[str, Any] | None = None,
+        ctx: ExecutionContext | DomainExecutionContext | dict[str, Any] | None = None,
         approval: GateDecision | None = None,
     ) -> Outcome:
         """Execute an action through the governance perimeter.
@@ -586,14 +606,16 @@ class GuardedExecutor:
                 # LLM actions are routed exclusively through GuardedLLMClient
                 # (which enforces policy again and invokes the provider adapter).
                 raw_result = await self._invoke_llm(action, run_id=action.run_id)
-            elif inspect.iscoroutinefunction(handler):
-                raw_result = await handler(action)
             else:
-                res = handler(action)
-                if inspect.isawaitable(res):
-                    raw_result = await res
+                assert handler is not None
+                if inspect.iscoroutinefunction(handler):
+                    raw_result = await handler(action)
                 else:
-                    raw_result = res
+                    res = handler(action)
+                    if inspect.isawaitable(res):
+                        raw_result = await res
+                    else:
+                        raw_result = res
         except Exception as exc:
             safe_error = redact_secrets_in_obj(str(exc))
             logger.error("Handler error during execution of %s: %s", action.name, safe_error)

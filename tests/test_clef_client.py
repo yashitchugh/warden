@@ -42,6 +42,7 @@ def test_executor_default_policy_uses_factory(monkeypatch: pytest.MonkeyPatch) -
     sentinel = FakeClefClient()
     monkeypatch.setattr(executor_mod, "get_clef_client", lambda: sentinel)
     executor = GuardedExecutor(journal=InMemoryJournal())
+    assert executor.policy is not None
     assert executor.policy.clef is sentinel
 
 

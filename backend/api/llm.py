@@ -12,6 +12,7 @@ API keys are read server-side from environment; never returned to the frontend.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import secrets
 import uuid
@@ -310,6 +311,79 @@ async def invoke_llm(body: LLMInvokeRequest) -> Any:
     - ALLOW executes through GuardedLLMClient and the configured provider adapter.
     - Never returns API keys or raw credentials in the response.
     """
+    return await _execute_llm(body, actor="api")
+
+
+async def invoke_agent_draft(
+    *,
+    prompt: str,
+    run_id: str,
+    thread_id: str,
+    actor: str,
+) -> str:
+    """Generate an agent reply through the same policy and client path as the API."""
+    body = LLMInvokeRequest(
+        model=settings.groq_model,
+        provider="groq",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an Aegis operations assistant. Answer briefly and "
+                    "respond only with plain text. Tools are disabled in this request: "
+                    "never request, emit, or claim to execute a tool. Do not claim an "
+                    "action succeeded unless its result is provided."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=256,
+        run_id=run_id,
+        thread_id=thread_id,
+    )
+    result = await _execute_llm(
+        body,
+        actor=actor,
+        extra_params={"reasoning_effort": "low"},
+    )
+    if isinstance(result, JSONResponse):
+        payload = json.loads(bytes(result.body))
+        return (
+            f"Request blocked by Aegis policy ({payload.get('policy_name', 'unknown')}): "
+            f"{payload.get('reason', 'This request was denied.')}"
+        )
+    if result.get("status") == "pending_approval":
+        return (
+            "The guarded LLM response is waiting for operator approval. "
+            f"Review gate {result.get('gate_id', '')} in the approvals inbox."
+        )
+    if result.get("status") != "ok":
+        detail = result.get("error_detail") or result.get("error_code")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "guarded_agent_draft_failed",
+                "message": str(detail or "The provider returned no successful completion."),
+            },
+        )
+    completion = result.get("completion")
+    if not isinstance(completion, str) or not completion.strip():
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "empty_guarded_agent_draft",
+                "message": "The guarded provider returned an empty completion.",
+            },
+        )
+    return completion.strip()
+
+
+async def _execute_llm(
+    body: LLMInvokeRequest,
+    *,
+    actor: str,
+    extra_params: dict[str, Any] | None = None,
+) -> Any:
     action = Action(
         id=f"llm-{uuid.uuid4().hex[:12]}",
         kind=ActionKind.LLM,
@@ -322,6 +396,8 @@ async def invoke_llm(body: LLMInvokeRequest) -> Any:
             "temperature": body.temperature,
             "require_approval": body.require_approval,
             "correlation_id": body.correlation_id,
+            "agent": actor,
+            "extra_params": extra_params or {},
         },
         run_id=body.run_id,
         thread_id=body.thread_id,
@@ -332,7 +408,7 @@ async def invoke_llm(body: LLMInvokeRequest) -> Any:
         ctx=ExecutionContext(
             run_id=body.run_id,
             thread_id=body.thread_id,
-            actor="api",
+            actor=actor,
             metadata={"correlation_id": body.correlation_id},
         ),
     )

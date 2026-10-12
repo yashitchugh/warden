@@ -14,7 +14,7 @@ Covers all requirements from Phase 1, Step 1:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 import pytest
 
 from warden.models import Action, ActionKind
@@ -184,8 +184,7 @@ async def test_non_action_instance_raises_policy_evaluation_error() -> None:
     engine = PolicyEngine.with_seed_policies()
 
     with pytest.raises(PolicyEvaluationError, match="Expected Action instance"):
-        await engine.evaluate({"name": "read_table"}  # type: ignore[arg-type]
-    )
+        await engine.evaluate(cast(Any, {"name": "read_table"}))
 
 
 # ---------------------------------------------------------------------------

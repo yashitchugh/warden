@@ -104,7 +104,8 @@ def build_demo_graph(
                 "model": llm_model,
                 "provider": llm_provider,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 128,
+                "max_tokens": 256,
+                "extra_params": {"reasoning_effort": "low"},
                 "agent": "Agent Runner",
             },
             run_id=f"demo-run:{thread_id}",
@@ -120,21 +121,25 @@ def build_demo_graph(
                 metadata={"agent": "demo_graph"},
             ),
         )
-        if isinstance(outcome, Allowed):
-            content = getattr(outcome.result, "result", None)
-            if isinstance(content, str) and content.strip():
-                return {
-                    "messages": [
-                        "Drafted email via guarded LLM: "
-                        f"'{content.strip().replace(chr(10), ' ')}' for team@example.com"
-                    ]
-                }
-        else:
-            logger.warning(
+        if not isinstance(outcome, Allowed):
+            logger.error(
                 "Guarded LLM draft did not execute (outcome=%s)",
                 outcome.kind.value,
             )
-        return draft_node(state)
+            raise RuntimeError(
+                f"Guarded LLM draft did not execute (outcome={outcome.kind.value})"
+            )
+
+        content = getattr(outcome.result, "result", None)
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("Guarded LLM returned an empty draft")
+
+        return {
+            "messages": [
+                "Drafted email via guarded LLM: "
+                f"'{content.strip().replace(chr(10), ' ')}' for team@example.com"
+            ]
+        }
 
     async def send_node(state: DemoState) -> dict[str, Any]:
         if executor is not None:

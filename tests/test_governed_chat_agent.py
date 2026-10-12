@@ -1,8 +1,8 @@
 """Tests for the LIVE governed OpsAssistant behind the chat UI.
 
-The chat console must talk to the real Phase-1 ops agent (live Groq replies +
-real Phase-1 tool actions crossing the GuardedExecutor seam), not the canned
-keyword stub. Covers registry wiring, intent -> tool mapping, offline fallback,
+The chat console must talk to the real Phase-1 ops agent (Groq replies through
+the GuardedLLMClient plus real Phase-1 tool actions crossing the GuardedExecutor
+seam), not a canned keyword stub. Covers registry wiring, intent -> tool mapping,
 and an end-to-end POST /chat/message round-trip.
 """
 
@@ -22,7 +22,7 @@ client = TestClient(app)
 class _DraftRecorder:
     seen: list[str] = []
 
-    async def __call__(self, prompt: str) -> str:
+    async def __call__(self, prompt: str, thread_id: str | None = None) -> str:
         self.seen.append(prompt)
         return f"LIVE-GROQ-REPLY for: {prompt[:40]}"
 

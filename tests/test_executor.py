@@ -528,13 +528,29 @@ async def test_demo_graph_send_node_executes_through_guarded_executor() -> None:
     """Demo graph wired with GuardedExecutor executes send_email through the guard."""
     executed_tools: list[str] = []
 
+    class FakeLLMClient:
+        async def invoke(self, action: Action, **kwargs: Any) -> Any:
+            return type("FakeLLMResult", (), {"result": "Generated report draft"})()
+
     async def send_email_handler(act: Action) -> str:
         executed_tools.append(act.name)
         return "Email dispatched successfully"
 
     engine = PolicyEngine.with_seed_policies()
+    engine.add_rule(
+        PolicyRule(
+            name="allow_test_llm",
+            decision=PolicyDecision.ALLOW,
+            action_kinds=(ActionKind.LLM,),
+            predicate=lambda action, ctx: True,
+        )
+    )
     journal = InMemoryAuditJournal()
-    executor = GuardedExecutor(journal=journal, policy=engine)
+    executor = GuardedExecutor(
+        journal=journal,
+        policy=engine,
+        llm_client=FakeLLMClient(),
+    )
     executor.register_handler("send_email", send_email_handler)
 
     from langchain_core.runnables import RunnableConfig
@@ -548,6 +564,7 @@ async def test_demo_graph_send_node_executes_through_guarded_executor() -> None:
 
     result = await graph.ainvoke(init_state, config)
     assert "__interrupt__" in result
+    assert "Generated report draft" in result["messages"][-1]
 
     # Resume with approval
     resume_cmd: Any = Command(resume="approve")

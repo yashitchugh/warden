@@ -124,7 +124,11 @@ async def record_llm_usage(
         "kind": event.kind,
         "actor": event.actor,
         "payload": event.payload,
-        "ts": event.ts.isoformat() if event.ts else None,
+        "ts": (
+            event.ts.isoformat()
+            if isinstance(event.ts, datetime)
+            else event.ts
+        ),
     }
 
 
@@ -160,7 +164,11 @@ async def record_audit_event(
         "kind": event.kind,
         "actor": event.actor,
         "payload": event.payload,
-        "ts": event.ts.isoformat() if event.ts else None,
+        "ts": (
+            event.ts.isoformat()
+            if isinstance(event.ts, datetime)
+            else event.ts
+        ),
     }
 
 

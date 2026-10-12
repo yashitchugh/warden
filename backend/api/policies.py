@@ -103,9 +103,9 @@ async def evaluate_policy(body: PolicyEvaluateRequest) -> dict[str, Any]:
     engine = PolicyEngine()
     try:
         verdict = engine.evaluate(
-            action_name=body.action_name,
-            payload=body.payload,
-            role=body.role,
+            body.action_name,
+            body.payload,
+            body.role,
         )
         return {
             "decision": verdict.decision.value,
